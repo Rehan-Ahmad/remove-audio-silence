@@ -1,0 +1,12 @@
+__pycache__
+*.pyc
+
+# Ignore these directories
+data/
+Duaa/
+wavs/
+
+# Ignore these files
+*.csv
+*.xlsx
+*.wav
