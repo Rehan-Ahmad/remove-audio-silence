@@ -122,7 +122,7 @@ def process_one(
     # Save visualization if requested
     if viz_png is not None:
         try:
-            save_vad_plot(audio_16k, orig_sr, speech_ts, viz_png)
+            save_vad_plot(audio_16k, analyze_sr, speech_ts, viz_png)
         except Exception as e:
             print(f"ERR viz {viz_png}: {e}", file=sys.stderr)
 
