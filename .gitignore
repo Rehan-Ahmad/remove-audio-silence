@@ -1,5 +1,17 @@
-__pycache__
+
+# Python cache
+__pycache__/
 *.pyc
+
+
+# Virtual environment (Poetry in-project)
+.venv/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
 
 # Ignore these directories
 data/
@@ -12,3 +24,7 @@ wavs/
 *.csv
 *.xlsx
 *.wav
+
+
+# Jupyter checkpoints
+*.ipynb_checkpoints
