@@ -43,15 +43,17 @@ def clamp01(x):
     return max(0.0, min(1.0, x))
 
 
-def save_vad_plot(audio, sr, speech_ts, out_png, time_step=0.01):
+def save_vad_plot(audio, sr, speech_ts, out_png, time_step=0.01, kept_region=None):
     """
-    Save a visualization: waveform + square-wave VAD mask.
+    Save a visualization: waveform + square-wave VAD mask (+ optional kept region).
 
     audio: 1D np.array (float32)
     sr: sample rate of audio
     speech_ts: list of {'start': s, 'end': e} in seconds
     out_png: path to save PNG
     time_step: resolution (sec) of the VAD mask
+    kept_region: optional (start_s, end_s) in seconds of the FINAL kept region
+                 after padding and clipping (in the SAME timebase as 'audio').
     """
     if audio is None or len(audio) == 0:
         return
@@ -63,7 +65,7 @@ def save_vad_plot(audio, sr, speech_ts, out_png, time_step=0.01):
     fig, ax = plt.subplots(figsize=(12, 3))
     ax.plot(t, audio, color="0.6", linewidth=0.6, label="Waveform")
 
-    # Build square-wave-like mask
+    # Build square-wave-like VAD mask (raw speech_ts)
     if dur > 0:
         tt = np.arange(0.0, dur + time_step, time_step)
         mask = np.zeros_like(tt)
@@ -75,6 +77,13 @@ def save_vad_plot(audio, sr, speech_ts, out_png, time_step=0.01):
         scaled = mask * (0.9 * max_amp)
         ax.step(tt, scaled, where="post", color="orange", linewidth=1.0, label="VAD speech")
         ax.fill_between(tt, 0, scaled, step="post", color="orange", alpha=0.25)
+
+    # Optional: show final kept region (after padding)
+    if kept_region is not None:
+        k0, k1 = kept_region
+        k0 = max(0.0, k0)
+        k1 = max(k0, k1)
+        ax.axvspan(k0, k1, color="green", alpha=0.15, label="Kept (with padding)")
 
     ax.set_xlim(0, max(dur, 0.1))
     ax.set_ylim(-max_amp * 1.05, max_amp * 1.05)
@@ -88,6 +97,7 @@ def save_vad_plot(audio, sr, speech_ts, out_png, time_step=0.01):
     plt.close(fig)
 
 
+
 def process_one(
     in_wav,
     out_wav,
@@ -98,6 +108,7 @@ def process_one(
     min_speech_ms=120,
     min_silence_ms=200,
     viz_png=None,
+    vad_json=None,
 ):
     # Read original (float32)
     audio, orig_sr = sf.read(in_wav, dtype="float32", always_2d=False)
@@ -119,12 +130,26 @@ def process_one(
         return_seconds=True,
     )
 
-    # Save visualization if requested
-    if viz_png is not None:
+    if vad_json is not None:
         try:
-            save_vad_plot(audio_16k, analyze_sr, speech_ts, viz_png)
+            os.makedirs(os.path.dirname(vad_json), exist_ok=True)
+            import json
+            with open(vad_json, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "in_wav": in_wav,
+                        "orig_sr": orig_sr,
+                        "analyze_sr": analyze_sr,
+                        "energy_threshold": energy_threshold,
+                        "min_speech_ms": min_speech_ms,
+                        "min_silence_ms": min_silence_ms,
+                        "speech_ts": speech_ts,  # list of {start, end} in seconds
+                    },
+                    f,
+                    indent=2,
+                )
         except Exception as e:
-            print(f"ERR viz {viz_png}: {e}", file=sys.stderr)
+            print(f"ERR vad_json {vad_json}: {e}", file=sys.stderr)
 
     # If nothing detected, just resample/copy to 24k
     if not speech_ts:
@@ -141,6 +166,20 @@ def process_one(
     pad = keep_silence
     t0 = max(0.0, start_s - pad)
     t1 = min(len(audio_16k) / analyze_sr, end_s + pad)
+
+    # Save visualization if requested (now we know kept_region)
+    if viz_png is not None:
+        try:
+            # audio_16k + analyze_sr, with both raw VAD and final kept region
+            save_vad_plot(
+                audio_16k,
+                analyze_sr,
+                speech_ts,
+                viz_png,
+                kept_region=(t0, t1),
+            )
+        except Exception as e:
+            print(f"ERR viz {viz_png}: {e}", file=sys.stderr)
 
     # Map seconds to original sample indices
     start_orig = int(round(t0 * orig_sr))
@@ -173,6 +212,11 @@ def main():
         default=None,
         help="If set, save waveform+VAD PNGs mirroring input tree",
     )
+    ap.add_argument(
+        "--vad_dir",
+        default=None,
+        help="If set, save raw speech_ts JSONs mirroring input tree",
+    )
     args = ap.parse_args()
 
     # Load Silero model (JIT by default; pass --onnx for ONNX)
@@ -181,6 +225,7 @@ def main():
     in_dir = Path(args.in_dir)
     out_dir = Path(args.out_dir)
     viz_dir = Path(args.viz_dir) if args.viz_dir else None
+    vad_dir = Path(args.vad_dir) if args.vad_dir else None
 
     wavs = sorted(in_dir.rglob("*.wav"))
     for w in wavs:
@@ -188,7 +233,11 @@ def main():
         out_w = out_dir / rel
         viz_png = None
         if viz_dir is not None:
-            viz_png = str((viz_dir / rel).with_suffix(".png"))
+            viz_png = str((viz_dir / rel).with_suffix(".png"))        
+        vad_json = None
+        if vad_dir is not None:
+            vad_json = str((vad_dir / rel).with_suffix(".json"))  # NEW
+
         try:
             status = process_one(
                 str(w),
@@ -200,6 +249,7 @@ def main():
                 min_speech_ms=args.min_speech_ms,
                 min_silence_ms=args.min_silence_ms,
                 viz_png=viz_png,
+                vad_json=vad_json,
             )
             print(f"{status:10s}  {rel}")
         except Exception as e:
